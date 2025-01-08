@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <title>Pyodide Playground</title>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+    <!-- ACE editor -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.37.1/ace.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.37.1/ext-language_tools.min.js"></script>
+    <style>
+        html,
+        body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+        }
+
+        * {
+            /* すべての要素に適用 */
+            box-sizing: border-box;
+        }
+
+        #code {
+            width: 100%;
+            height: 50vh;
+        }
+
+        #output {
+            width: 100%;
+            white-space: pre-wrap;
+            margin-top: 5px;
+            overflow-y: auto;
+        }
+
+        input {
+            margin-top: 5px;
+        }
+
+        button {
+            margin-top: 5px;
+            margin-bottom: 5px;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="content">
+            <div id="code"></div>
+            <textarea id="initialCode" style="display: none;">
+import pandas as pd
+from sklearn.datasets import load_iris
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+
+# Irisデータセットをロード
+iris = load_iris()
+df = pd.DataFrame(iris.data, columns=iris.feature_names)
+df['target'] = iris.target
+
+# データをトレーニングセットとテストセットに分割
+X_train, X_test, y_train, y_test = train_test_split(
+    df.drop('target', axis=1), df['target'], test_size=0.3, random_state=0
+)
+
+# ロジスティック回帰モデルを作成し、トレーニング
+model = LogisticRegression()
+model.fit(X_train, y_train)
+
+# テストデータで予測
+y_pred = model.predict(X_test)
+
+# 予測結果を表示
+print("予測結果:", y_pred)
+
+# モデルの精度を評価
+accuracy = model.score(X_test, y_test)
+print(f"精度: {accuracy}")
+</textarea>
+            <input type="text" id="packagesToInstall" value="pandas,scikit-learn" placeholder="インストールするパッケージ (カンマ区切り)">
+            <button id="runButton" onclick="runPython()">実行（Ctrl+Enter）</button>
+            <div id="output"></div>
+        </div>
+    </div>
+
+    <script>
+        // ACE editor setup
+        let editor = ace.edit("code");
+        editor.session.setMode("ace/mode/python");
+        editor.setAutoScrollEditorIntoView(true);
+        editor.setOptions({
+            enableBasicAutocompletion: true,
+            enableSnippets: true,
+            enableLiveAutocompletion: true
+        });
+        // Get initial code from the hidden textarea and set it in the editor
+        const initialCode = document.getElementById("initialCode").value;
+        editor.setValue(initialCode);
+        editor.clearSelection();
+
+        let running = false;
+        let pyodideReadyPromise = loadPyodide({
+            stdout: (text) => {
+                if (document.getElementById("output").innerText.startsWith("実行中...\n") ||
+                    document.getElementById("output").innerText.startsWith("インストール中...")) {
+                    document.getElementById("output").innerText = "";
+                }
+                document.getElementById("output").innerText += text + "\n";
+            }
+        });
+        let pyodide; // pyodideインスタンスを格納する変数
+
+        async function runPython() {
+            if (running) return;
+            running = true;
+            document.getElementById("output").innerText = "実行中...\n";
+            pyodide = await pyodideReadyPromise;
+
+            // micropipをロード
+            await pyodide.loadPackage("micropip");
+            const micropip = pyodide.pyimport("micropip");
+
+            // インストールするパッケージをユーザーの入力から取得
+            const packagesToInstallString = document.getElementById("packagesToInstall").value;
+            const packagesToInstall = packagesToInstallString
+                .split(',')
+                .map(pkg => pkg.trim())
+                .filter(pkg => pkg !== "");
+
+            // インストール済みパッケージのリストを取得
+            const installedPackages = await micropip.list();
+            const installedPackageNames = new Set(installedPackages.toJs());
+
+            // インストールが必要なパッケージを特定し、インストールを実行
+            for (const packageToInstall of packagesToInstall) {
+                if (!installedPackageNames.has(packageToInstall)) {
+                    document.getElementById("output").innerText += `${packageToInstall}をインストール中...\n`;
+                    await micropip.install([packageToInstall]);
+                    document.getElementById("output").innerText += `${packageToInstall}をインストールしました。\n`;
+                }
+            }
+
+            const code = editor.getValue();
+            try {
+                await pyodide.runPythonAsync(code);
+            } catch (err) {
+                document.getElementById("output").innerText += err;
+            } finally {
+                running = false;
+            }
+        }
+
+        document.addEventListener('keydown', function (event) {
+            if (event.ctrlKey && event.key === 'Enter') {
+                document.getElementById('runButton').click();
+            }
+        });
+    </script>
+</body>
+
+</html>
