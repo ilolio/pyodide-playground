@@ -153,6 +153,7 @@ print(f"精度: {accuracy}")
                 }
             }
 
+            const startTime = performance.now();
             const code = editor.getValue();
             try {
                 await pyodide.runPythonAsync(code);
@@ -160,6 +161,13 @@ print(f"精度: {accuracy}")
                 document.getElementById("output").innerText += err;
             } finally {
                 running = false;
+                // 実行終了時に「実行中...」を削除
+                if (document.getElementById("output").innerText.startsWith("実行中...\n")) {
+                    document.getElementById("output").innerText = document.getElementById("output").innerText.replace("実行中...\n", "");
+                }
+                const endTime = performance.now();
+                const elapsedTime = (endTime - startTime) / 1000; // 秒単位
+                document.getElementById("output").innerText += `\n--Execution finished (${elapsedTime.toFixed(2)} seconds)--`;
             }
         }
 
