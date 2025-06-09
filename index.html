@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <title>Pyodide Playground</title>
     <script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
-    <!-- ACE editor -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.37.1/ace.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.37.1/ext-language_tools.min.js"></script>
     <style>
@@ -53,6 +53,19 @@
             display: flex;
             flex-direction: column;
         }
+
+        .url-controls {
+            padding: 5px;
+            background-color: #f5f5f5;
+            border-radius: 3px;
+            text-align: right;
+        }
+
+        .url-controls button {
+            margin: 2px;
+            padding: 5px 10px;
+            font-size: 12px;
+        }
     </style>
 </head>
 
@@ -63,6 +76,11 @@
             <textarea id="initialCode" style="display: none;">
 print("hello")
 </textarea>
+            <div class="url-controls">
+                <button onclick="generateURL()">URLを生成</button>
+                <button onclick="copyURL()">URLをコピー</button>
+                <input type="text" id="generatedURL" readonly style="width: 50%; margin-left: 10px;" placeholder="生成されたURLがここに表示されます">
+            </div>
             <input type="text" id="packagesToInstall" value="" placeholder="インストールするパッケージ (カンマ区切り)">
             <button id="runButton" onclick="runPython()">実行（Ctrl+Enter）</button>
             <div id="output"></div>
@@ -70,6 +88,122 @@ print("hello")
     </div>
 
     <script>
+        // gzip圧縮してURL安全なBase64エンコードする関数
+        function compressAndEncode(text) {
+            try {
+                const compressed = pako.gzip(text);
+                const base64 = btoa(String.fromCharCode.apply(null, compressed));
+                // URL安全なBase64に変換（+ → -, / → _, = を削除）
+                return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+            } catch (e) {
+                console.error('圧縮・エンコードに失敗しました:', e);
+                throw e;
+            }
+        }
+
+        // URL安全なBase64デコードしてgzip展開する関数
+        function decodeAndDecompress(base64) {
+            try {
+                // URL安全なBase64を通常のBase64に戻す（- → +, _ → /）
+                let normalBase64 = base64.replace(/-/g, '+').replace(/_/g, '/');
+                // パディングを復元
+                while (normalBase64.length % 4) {
+                    normalBase64 += '=';
+                }
+                
+                const binaryString = atob(normalBase64);
+                const bytes = new Uint8Array(binaryString.length);
+                for (let i = 0; i < binaryString.length; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+                const decompressed = pako.ungzip(bytes, { to: 'string' });
+                return decompressed;
+            } catch (e) {
+                console.error('デコード・展開に失敗しました:', e);
+                throw e;
+            }
+        }
+
+        // URLパラメータからコードとパッケージ情報を取得する関数
+        function getDataFromURL() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
+            const packages = urlParams.get('packages');
+            
+            let decodedCode = null;
+            let decodedPackages = '';
+            
+            if (code) {
+                try {
+                    // Base64デコード
+                    decodedCode = decodeAndDecompress(code);
+                } catch (e) {
+                    console.error('コードのデコードに失敗しました:', e);
+                }
+            }
+            
+            if (packages) {
+                try {
+                    // Base64デコード
+                    decodedPackages = decodeAndDecompress(packages);
+                } catch (e) {
+                    console.error('パッケージ情報のデコードに失敗しました:', e);
+                }
+            }
+            
+            return { code: decodedCode, packages: decodedPackages };
+        }
+
+        // コードとパッケージ情報からURLを生成する関数
+        function generateURL() {
+            const code = editor.getValue();
+            const packages = document.getElementById('packagesToInstall').value;
+            
+            if (!code.trim()) {
+                alert('コードが空です');
+                return;
+            }
+            
+            try {
+                // gzip圧縮してBase64エンコード
+                const encodedCode = compressAndEncode(code);
+                const baseURL = window.location.origin + window.location.pathname;
+                
+                let fullURL = `${baseURL}?code=${encodedCode}`;
+                
+                // パッケージ情報がある場合は追加
+                if (packages.trim()) {
+                    const encodedPackages = compressAndEncode(packages);
+                    fullURL += `&packages=${encodedPackages}`;
+                }
+                
+                document.getElementById('generatedURL').value = fullURL;
+            } catch (e) {
+                console.error('URLの生成に失敗しました:', e);
+                alert('URLの生成に失敗しました');
+            }
+        }
+
+        // URLをクリップボードにコピーする関数
+        function copyURL() {
+            const urlField = document.getElementById('generatedURL');
+            if (!urlField.value) {
+                alert('まずURLを生成してください');
+                return;
+            }
+            
+            urlField.select();
+            urlField.setSelectionRange(0, 99999); // モバイル対応
+            
+            try {
+                document.execCommand('copy');
+                alert('URLがクリップボードにコピーされました');
+            } catch (e) {
+                console.error('コピーに失敗しました:', e);
+                alert('コピーに失敗しました。手動でURLを選択してコピーしてください。');
+            }
+        }
+
         // ACE editor setup
         let editor = ace.edit("code");
         editor.session.setMode("ace/mode/python");
@@ -79,10 +213,17 @@ print("hello")
             enableSnippets: true,
             enableLiveAutocompletion: true
         });
-        // Get initial code from the hidden textarea and set it in the editor
-        const initialCode = document.getElementById("initialCode").value;
+
+        // URLパラメータからコードとパッケージ情報を取得、なければデフォルト値を使用
+        const urlData = getDataFromURL();
+        const initialCode = urlData.code || document.getElementById("initialCode").value;
+        const initialPackages = urlData.packages || '';
+        
         editor.setValue(initialCode);
         editor.clearSelection();
+        
+        // パッケージ情報も設定
+        document.getElementById('packagesToInstall').value = initialPackages;
 
         let running = false;
         let pyodideReadyPromise = loadPyodide({
